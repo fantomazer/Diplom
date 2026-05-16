@@ -913,6 +913,7 @@ class DataModel:
         # Метод автоматично визначає індекси потрібних колонок за ключовими словами
         # у заголовку (перший рядок файлу). Підтримує файли від різних систем
         # завдяки гнучкому пошуку назв колонок.
+        wb = load_workbook(path, data_only=True)                            # відкрити файл Excel
         ws = wb.active
         rows = list(ws.iter_rows(values_only=True))
         if not rows:
@@ -1072,6 +1073,11 @@ class InventoryApp:
         self.root.geometry("1440x900")                                  # розмір вікна при запуску
         self.root.minsize(1100, 700)                                    # мінімальний допустимий розмір
         self.root.configure(bg=C["bg"])                                 # колір фону вікна
+        # Налаштування кольору випадаючого списку Combobox (окремий tk-віджет, не ttk)
+        self.root.option_add("*TCombobox*Listbox.background",  C["input_bg"])  # фон списку
+        self.root.option_add("*TCombobox*Listbox.foreground",  C["text"])       # колір тексту
+        self.root.option_add("*TCombobox*Listbox.selectBackground", C["sel"])   # виділення
+        self.root.option_add("*TCombobox*Listbox.selectForeground", C["text"])  # текст виділення
         self.model = DataModel()                                        # створити модель даних
 
         # Прапорець і лічильник для механізму автооновлення кожні 5 секунд.
@@ -1159,8 +1165,19 @@ class InventoryApp:
         st.map("Danger.TButton", background=[("active", "#B91C1C")])
         st.configure("TEntry", fieldbackground=C["input_bg"], foreground=C["text"],
                       insertcolor=C["text"], borderwidth=1, relief="flat")
+        st.map("TEntry",                                                # примусово задати колір тексту в усіх станах
+               foreground=[("disabled", C["text3"]), ("focus", C["text"]), ("!focus", C["text"])],
+               fieldbackground=[("disabled", C["bg3"]), ("focus", C["input_bg"]), ("!focus", C["input_bg"])])
         st.configure("TCombobox", fieldbackground=C["input_bg"], foreground=C["text"],
-                      selectbackground=C["sel"], borderwidth=1)
+                      selectbackground=C["sel"], selectforeground=C["text"],
+                      insertcolor=C["text"], borderwidth=1)
+        st.map("TCombobox",                                             # примусово задати колір тексту в усіх станах
+               foreground=[("readonly", C["text"]), ("disabled", C["text3"]),
+                            ("focus", C["text"]), ("!focus", C["text"])],
+               fieldbackground=[("readonly", C["input_bg"]), ("disabled", C["bg3"]),
+                                 ("focus", C["input_bg"]), ("!focus", C["input_bg"])],
+               selectforeground=[("readonly", C["text"]), ("focus", C["text"])],
+               selectbackground=[("readonly", C["sel"]), ("focus", C["sel"])])
         st.configure("TLabelframe", background=C["bg"], borderwidth=1,
                       relief="flat", bordercolor=C["border"])
         st.configure("TLabelframe.Label", background=C["bg"], foreground=C["accent"], font=FNTB)
@@ -1236,8 +1253,9 @@ class InventoryApp:
         self.refresh_dashboard()                                        # оновити дашборд
 
     def _update_clock(self):
-        self._clock_lbl.config(text=datetime.now().strftime("%H:%M:%S   %d.%m.%Y"))
-        self.root.after(1000, self._update_clock)
+        if self._clock_lbl.winfo_exists():                                  # перевірити що віджет існує
+            self._clock_lbl.config(text=datetime.now().strftime("%H:%M:%S   %d.%m.%Y"))
+            self.root.after(1000, self._update_clock)
 
     def _status(self, msg, color=None):
         self._status_var.set(msg)
@@ -3445,13 +3463,28 @@ class InventoryApp:
 
     # Вкладка "Налаштування"
     # Вибір мови інтерфейсу та теми оформлення.
-    # Тема застосовується одразу без перезапуску.
-    # Мова набуває чинності після перезапуску програми.
+    # Тема застосовується одразу при перемиканні радіо-кнопки без натискання "Зберегти".
+    # Мова також застосовується одразу з повною перебудовою інтерфейсу.
     def _build_settings(self, parent):
         canvas = tk.Canvas(parent, bg=C["bg"], highlightthickness=0)
-        canvas.pack(fill="both", expand=True)
+        vsb = ttk.Scrollbar(parent, orient="vertical", command=canvas.yview) # вертикальний скролбар
+        canvas.configure(yscrollcommand=vsb.set)                        # прив'язати скролбар до canvas
+        vsb.pack(side="right", fill="y")                                # розмістити скролбар праворуч
+        canvas.pack(fill="both", expand=True)                           # розмістити canvas
         inner = tk.Frame(canvas, bg=C["bg"])
-        canvas.create_window((0, 0), window=inner, anchor="nw")
+        win_id = canvas.create_window((0, 0), window=inner, anchor="nw")
+        canvas.bind("<Configure>", lambda e: canvas.itemconfig(win_id, width=e.width)) # розтягнути по ширині
+        inner.bind("<Configure>", lambda e: canvas.configure(scrollregion=canvas.bbox("all"))) # оновити область прокрутки
+
+        def _scroll(event):                                             # обробник прокрутки колесом миші
+            if event.delta:
+                canvas.yview_scroll(int(-1 * (event.delta / 120)), "units")
+            elif event.num == 4:
+                canvas.yview_scroll(-1, "units")
+            elif event.num == 5:
+                canvas.yview_scroll(1, "units")
+        canvas.bind("<MouseWheel>", _scroll)
+        inner.bind("<MouseWheel>", _scroll)
 
         tk.Label(inner, text=f"⚙️ {self.T_('settings_title')}",
                   bg=C["bg"], fg=C["text"], font=FNTH).pack(anchor="w", padx=24, pady=(20,14))
@@ -3461,7 +3494,7 @@ class InventoryApp:
         sf.pack(fill="x", padx=24, pady=8)
         lg = tk.Frame(sf, bg=C["bg"]); lg.pack(fill="x")
         ttk.Label(lg, text=self.T_("lbl_language")).pack(side="left", padx=(0, 14))
-        lang_var = tk.StringVar(value=self.settings.get("lang", "uk"))
+        lang_var = tk.StringVar(value=self.lang_code)                   # поточна мова інтерфейсу
         for code, label in [("uk","🇺🇦 Українська"), ("ru","🇷🇺 Русский"), ("en","🇬🇧 English")]:
             ttk.Radiobutton(lg, text=label, variable=lang_var, value=code).pack(side="left", padx=10)
 
@@ -3470,7 +3503,7 @@ class InventoryApp:
         tf.pack(fill="x", padx=24, pady=8)
         tg = tk.Frame(tf, bg=C["bg"]); tg.pack(fill="x")
         ttk.Label(tg, text=self.T_("lbl_theme")).pack(side="left", padx=(0, 14))
-        theme_var = tk.StringVar(value=self.settings.get("theme", "light"))
+        theme_var = tk.StringVar(value=self.theme_name)                 # поточна тема оформлення
         ttk.Radiobutton(tg, text=f"☀️ {self.T_('theme_light')}", variable=theme_var, value="light").pack(side="left", padx=10)
         ttk.Radiobutton(tg, text=f"🌙 {self.T_('theme_dark')}",  variable=theme_var, value="dark").pack(side="left", padx=10)
 
@@ -3498,38 +3531,7 @@ class InventoryApp:
         tk.Label(about_f, text=about_text, bg=C["bg"], fg=C["text2"],
                   font=FNTS, justify="left", anchor="w").pack(fill="x")
 
-        def save_s():
-            new_theme = theme_var.get()
-            new_lang  = lang_var.get()
-            new_s = {"lang": new_lang, "theme": new_theme}
-            save_settings(new_s)
-            self.settings = new_s
-
-            # Застосування нової теми одразу після натискання кнопки "Зберегти"
-            lang_changed  = (new_lang  != self.lang_code)
-            theme_changed = (new_theme != self.theme_name)
-
-            if theme_changed:
-                self.theme_name = new_theme
-                global C                                                # оголосити C глобальною
-                C = THEMES[new_theme]
-                self._setup_styles()                                    # налаштувати стилі ttk
-                self._apply_theme_to_all_widgets(self.root)
-                # Оновити превью в цій же панелі
-                _refresh_preview()
-
-            if lang_changed:
-                self.lang_code = new_lang
-                self.T = LANG[new_lang]
-                # Мова вимагає повного перебудування UI - пропонуємо перезапуск
-                messagebox.showinfo(
-                    "Мова / Language",
-                    "Мову змінено. Для повного застосування перезапустіть програму.\n"
-                    "Language changed. Please restart to fully apply.")
-            else:
-                self._status("✅ Тему застосовано", C["success"])
-
-        def _refresh_preview():
+        def _refresh_preview():                                         # оновити превью теми
             for w in p_inner.winfo_children():
                 w.destroy()
             th = THEMES[theme_var.get()]
@@ -3543,6 +3545,19 @@ class InventoryApp:
                 tk.Label(p_inner, text=text, bg=bg_c, fg=color,
                           font=FNT, padx=10, pady=5).pack(side="left", padx=4)
 
+        def save_s():
+            new_theme = theme_var.get()                                 # отримати обрану тему
+            new_lang  = lang_var.get()                                  # отримати обрану мову
+
+            # Оновлюємо всі поточні значення до перебудови інтерфейсу
+            self.settings   = {"lang": new_lang, "theme": new_theme}   # оновити словник налаштувань
+            self.theme_name = new_theme                                 # зберегти нову тему
+            self.lang_code  = new_lang                                  # зберегти нову мову
+            save_settings(self.settings)                                # зберегти на диск
+
+            # Завжди перебудовуємо UI щоб гарантовано застосувати тему/мову
+            self._rebuild_ui()                                          # перебудувати інтерфейс
+
         # Живий перегляд при перемиканні радіо-кнопки
         theme_var.trace_add("write", lambda *_: _refresh_preview())
         _refresh_preview()
@@ -3551,41 +3566,49 @@ class InventoryApp:
         ttk.Button(btn_row, text=self.T_("btn_save"), style="Accent.TButton",
                     command=save_s).pack(side="left")
         tk.Label(inner,
-                  text="💡 Тема застосовується одразу. Мова - після перезапуску.",
-                  bg=C["bg"], fg=C["text3"], font=FNTS).pack(anchor="w", padx=24, pady=(0, 8))
+                  text="💡 Тема та мова застосовуються після натискання «Зберегти».",
+                  bg=C["bg"], fg=C["text3"], font=FNTS).pack(anchor="w", padx=24, pady=(0, 24))
 
-    def _apply_theme_to_all_widgets(self, widget):
-        """Рекурсивно переофарблює всі tk-віджети під поточну тему C."""
-        cls = widget.winfo_class()                                      # клас віджету
+    def _rebuild_ui(self):
+        # Повністю перебудовує інтерфейс після зміни теми або мови.
+        # Це єдиний надійний спосіб застосувати нову тему до ttk-віджетів,
+        # оскільки вони не підтримують пряме переофарблення через configure().
+        # Зберігає поточний індекс вкладки і відновлює його після перебудови.
         try:
-            if cls in ("Frame", "Labelframe"):                          # фрейм
-                widget.configure(bg=C["bg"])                            # встановити фон
-            elif cls == "Label":                                        # мітка
-                widget.configure(bg=C["bg"], fg=C["text"])              # фон і колір тексту
-            elif cls == "Canvas":                                       # полотно
-                widget.configure(bg=C["canvas_bg"])                     # фон полотна
-            elif cls == "Text":                                         # текстове поле
-                widget.configure(bg=C["canvas_bg"], fg=C["text"],
-                                  insertbackground=C["text"])
-            elif cls == "Button":                                       # звичайна кнопка
-                widget.configure(bg=C["bg3"], fg=C["text"],
-                                  activebackground=C["border2"])
+            current_tab = self.nb.index(self.nb.select())               # зберегти поточну вкладку
         except Exception:
-            pass
-        for child in widget.winfo_children():                           # рекурсія по дочірніх
-            self._apply_theme_to_all_widgets(child)                     # застосувати тему до дочірнього
-        # Оновити ttk-стилі
+            current_tab = 0                                             # за замовчуванням перша вкладка
+
+        # Скасувати таймер автооновлення щоб уникнути помилок під час перебудови
+        if self._auto_refresh_id:                                       # якщо є активний таймер
+            self.root.after_cancel(self._auto_refresh_id)               # скасувати таймер
+            self._auto_refresh_id = None                                # скинути ідентифікатор
+
+        # Видалити всі дочірні віджети кореневого вікна
+        for widget in self.root.winfo_children():                       # перебрати всі дочірні
+            widget.destroy()                                            # знищити кожен віджет
+
+        # Оновити глобальну колірну тему та словник перекладів
+        global C                                                        # оголосити C глобальною
+        C = THEMES[self.theme_name]                                     # завантажити активну тему
+        self.T = LANG[self.lang_code]                                   # завантажити переклади
+        self.root.configure(bg=C["bg"])                                 # колір фону вікна
         self._setup_styles()                                            # налаштувати стилі ttk
-        # Оновити фони хедера і статусбара
+
+        # Перебудувати інтерфейс з нуля
+        self._build_ui()                                                # побудувати інтерфейс
+        self._bind_hotkeys()                                            # прив'язати гарячі клавіші
+        self.root.protocol("WM_DELETE_WINDOW", self._on_close)          # обробник закриття вікна
+
+        # Відновити вкладку яка була активна до перебудови
         try:
-            for w in self.root.winfo_children():
-                if isinstance(w, tk.Frame) and w.winfo_height() <= 60:
-                    try: w.configure(bg=C["accent_dk"])
-                    except: pass
+            self.nb.select(current_tab)                                 # відновити активну вкладку
         except Exception:
             pass
-        # Оновити дані у всіх табах
-        self.root.after(50, self._full_refresh)                         # оновити всі вкладки через 50мс
+
+        # Перезапустити автооновлення якщо воно було увімкнено
+        if self._auto_refresh:                                          # якщо автооновлення увімкнено
+            self._auto_refresh_id = self.root.after(5000, self._auto_refresh_tick) # перший тік через 5с
 
     # Привязка гарячих клавіш
     # Ctrl+N - нова операція, F5 - повне оновлення,
